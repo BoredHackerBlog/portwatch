@@ -13,6 +13,7 @@ RUN pip3 install flask-sqlalchemy
 RUN pip3 install flask-admin
 RUN pip3 install python3-nmap
 RUN pip3 install schedule
+RUN pip3 install pandas
 
 RUN mkdir /app
 RUN mkdir /app/database

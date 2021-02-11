@@ -1,4 +1,5 @@
 #search for CHANGEME
+
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_admin import Admin
@@ -13,12 +14,15 @@ import schedule
 import time
 
 import threading
+scanner_mutex = threading.Lock()
+
+import pandas as pd
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 #app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////app/database/portwatch.db' #CHANGEME
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = 'asdflkajdsflkjasefiojel134234234'
+app.config['SECRET_KEY'] = 'asdflkajdsflkjasefiojel134234234' #CHANGEME
 
 db = SQLAlchemy(app)
 
@@ -30,81 +34,171 @@ class Asset(db.Model):
     comment = db.Column(db.String(140))
     ips = db.Column(db.Text,nullable=False)
 
-class OpenPorts(db.Model):
+class OldServices(db.Model):
     id = db.Column(db.Integer,primary_key=True)
     asset_name = db.Column(db.String(10),nullable=False)
     ip = db.Column(db.String(15),nullable=False)
     port = db.Column(db.Integer,nullable=False)
+    name = db.Column(db.String(15),nullable=True)
+    product = db.Column(db.String(50),nullable=True)
+    version = db.Column(db.String(50),nullable=True)
+    extrainfo = db.Column(db.String(50),nullable=True)
 
-class OpenPortFinding(db.Model):
+class NewServices(db.Model):
     id = db.Column(db.Integer,primary_key=True)
     asset_name = db.Column(db.String(10),nullable=False)
     ip = db.Column(db.String(15),nullable=False)
     port = db.Column(db.Integer,nullable=False)
+    name = db.Column(db.String(15),nullable=True)
+    product = db.Column(db.String(50),nullable=True)
+    version = db.Column(db.String(50),nullable=True)
+    extrainfo = db.Column(db.String(50),nullable=True)
+
+class ServiceChanges(db.Model):
+    id = db.Column(db.Integer,primary_key=True)
+    asset_name = db.Column(db.String(10),nullable=False)
+    ip = db.Column(db.String(15),nullable=False)
+    port = db.Column(db.Integer,nullable=False)
+    name = db.Column(db.String(15),nullable=True)
+    product = db.Column(db.String(50),nullable=True)
+    version = db.Column(db.String(50),nullable=True)
+    extrainfo = db.Column(db.String(50),nullable=True)
+    status = db.Column(db.String(7),nullable=False)
     timestamp = db.Column(db.DateTime,default=datetime.datetime.utcnow)
 
 db.create_all()
 
 admin.add_view(ModelView(Asset, db.session))
-admin.add_view(ModelView(OpenPorts, db.session))
-admin.add_view(ModelView(OpenPortFinding, db.session))
+admin.add_view(ModelView(OldServices, db.session))
+admin.add_view(ModelView(NewServices, db.session))
+admin.add_view(ModelView(ServiceChanges, db.session))
 
 #add assets here and visit http://IP:PORT/asset_add to add the assets
-db.session.add(Asset(name="server",comment="testing",ips="192.168.95.137, 10.0.0.30, 192.168.1.1/24")) #CHANGEME
+db.session.add(Asset(name="server",comment="testing",ips="192.168.95.137, 10.0.0.30")) #CHANGEME
 db.session.commit()
 
 #just scan top ports. Modify according to needs
 def scan(ips):
-    results = nmap.scan_top_ports(ips, args="--open -Pn -T5") #https://github.com/nmmapper/python3-nmap #CHANGEME
+    results = nmap.scan_top_ports(ips, args="--open -Pn -T5 -sV") #https://github.com/nmmapper/python3-nmap #CHANGEME
     results.pop('stats',None)
     results.pop('runtime',None)
 
-    openports = {}
-    for ip in results:
-        openports[ip] = []
-        for port in results[ip]['ports']:
-            openports[ip].append(int(port['portid']))
-
-    return openports
+    return results
 
 def initial_scan():
+    if scanner_mutex.locked() == True:
+        return "Scanner running already"
+
+    scanner_mutex.acquire()
     assets = Asset.query.all()
-    OpenPorts.query.delete()
+    OldServices.query.delete()
+    NewServices.query.delete()
+    db.session.commit()
+
     for asset in assets:
         ips_list = asset.ips.split(',')
         for ip in ips_list:
             scan_results = scan(ip)
             for scanned_ip in scan_results:
-                for scanned_port in scan_results[scanned_ip]:
-                    print(db.session.add(OpenPorts(asset_name=asset.name,ip=scanned_ip,port=scanned_port)))
+                for scanned_port in scan_results[scanned_ip]['ports']:
+                    asset_name = asset.name
+                    ip = scanned_ip
+                    port = scanned_port['portid']
+                    if 'name' in scanned_port['service'].keys():
+                        name = scanned_port['service']['name']
+                    else:
+                        name = "NULL"
 
+                    if 'product' in scanned_port['service'].keys():
+                        product = scanned_port['service']['product']
+                    else:
+                        product = "NULL"
+                    
+                    if 'version' in scanned_port['service'].keys():
+                        version = scanned_port['service']['version']
+                    else:
+                        version = "NULL"
+
+                    if 'extrainfo' in scanned_port['service'].keys():
+                        extrainfo = scanned_port['service']['extrainfo']
+                    else:
+                        extrainfo = "NULL"
+
+                    db.session.add(NewServices(asset_name=asset_name,ip=ip,port=port,name=name,product=product,version=version,extrainfo=extrainfo))
+    
     db.session.commit()
-    return "Initial Scan finished"
+    scanner_mutex.release()
+    return "Scanning Finished"
 
-def compare(asset, scan_results):
-    compare_results = {}
-    for scanned_ip in scan_results:
-        for scanned_port in scan_results[scanned_ip]:
-            if OpenPorts.query.filter_by(asset_name=asset.name,ip=scanned_ip,port=scanned_port).count() == 0:
-                db.session.add(OpenPortFinding(asset_name=asset.name,ip=scanned_ip,port=scanned_port))
-                if scanned_ip in compare_results.keys():
-                    compare_results[scanned_ip].append(scanned_port)
-                else:
-                    compare_results[scanned_ip] = []
-                    compare_results[scanned_ip].append(scanned_port)
+def compare():
+    OldServicesdf = pd.read_sql(OldServices.query.statement, OldServices.query.session.bind)
+    NewServicesdf = pd.read_sql(NewServices.query.statement, NewServices.query.session.bind)
+    
+    removeddf = OldServicesdf.merge(NewServicesdf, how = 'outer' ,indicator=True).loc[lambda x : x['_merge']=='left_only']
+    addeddf = OldServicesdf.merge(NewServicesdf, how = 'outer' ,indicator=True).loc[lambda x : x['_merge']=='right_only']
 
+    return removeddf, addeddf
+
+def run_new_scan():
+    if scanner_mutex.locked() == True:
+        return "Scanner running already"
+
+    scanner_mutex.acquire()
+    OldServices.query.delete()
+    df = pd.read_sql(NewServices.query.statement, NewServices.query.session.bind)
+    df.to_sql(OldServices.__table__.name,OldServices.query.session.bind,if_exists='replace')
+    NewServices.query.delete()
     db.session.commit()
-    return compare_results
 
-def runscans():
     assets = Asset.query.all()
     for asset in assets:
         ips_list = asset.ips.split(',')
         for ip in ips_list:
             scan_results = scan(ip)
-            compare_results = compare(asset, scan_results)
-            #CHANGEME - do something with the compare_results variable if needed
-    return "New scan finished"
+            for scanned_ip in scan_results:
+                for scanned_port in scan_results[scanned_ip]['ports']:
+                    asset_name = asset.name
+                    ip = scanned_ip
+                    port = scanned_port['portid']
+                    if 'name' in scanned_port['service'].keys():
+                        name = scanned_port['service']['name']
+                    else:
+                        name = "NULL"
+
+                    if 'product' in scanned_port['service'].keys():
+                        product = scanned_port['service']['product']
+                    else:
+                        product = "NULL"
+                    
+                    if 'version' in scanned_port['service'].keys():
+                        version = scanned_port['service']['version']
+                    else:
+                        version = "NULL"
+
+                    if 'extrainfo' in scanned_port['service'].keys():
+                        extrainfo = scanned_port['service']['extrainfo']
+                    else:
+                        extrainfo = "NULL"
+
+                    db.session.add(NewServices(asset_name=asset_name,ip=ip,port=port,name=name,product=product,version=version,extrainfo=extrainfo))
+
+    db.session.commit()
+    scanner_mutex.release()
+
+    removeddf, addeddf = compare()
+    
+    if removeddf.shape[0] > 0:
+        for line in removeddf.iloc:
+            db.session.add(ServiceChanges(asset_name=line['asset_name'], ip=line['ip'], port=int(line['port']), name=line['name'], product=line['product'], version=line['version'], extrainfo=line['extrainfo'], status="REMOVED"))
+            #CHANGEME - do webhook or something here
+
+    if addeddf.shape[0] > 0:
+        for line in addeddf.iloc:
+            db.session.add(ServiceChanges(asset_name=line['asset_name'], ip=line['ip'], port=int(line['port']), name=line['name'], product=line['product'], version=line['version'], extrainfo=line['extrainfo'], status="ADDED"))
+            #CHANGEME - do webhook or something here
+    
+    db.session.commit()
+    return "Scanning Finished"
 
 #initial scan, rerunning this wipes baseline OpenPorts table and readds ports
 @app.route("/initial_scan")
@@ -114,10 +208,10 @@ def initial_scan_page():
 #scan will result in comparision between initial scan results
 @app.route("/new_scan")
 def new_scan_page():
-    return runscans()
+    return run_new_scan()
 
 #https://schedule.readthedocs.io/en/stable/
-schedule.every(1).minutes.do(runscans) #CHANGEME
+schedule.every(8).hours.do(run_new_scan) #CHANGEME
 
 def schedule_thread():
     while True:
