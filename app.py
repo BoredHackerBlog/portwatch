@@ -86,9 +86,6 @@ def scan(ips):
     return results
 
 def initial_scan():
-    if scanner_mutex.locked() == True:
-        return "Scanner running already"
-
     scanner_mutex.acquire()
     assets = Asset.query.all()
     OldServices.query.delete()
@@ -128,11 +125,10 @@ def initial_scan():
     
     db.session.commit()
     scanner_mutex.release()
-    return "Scanning Finished"
 
 def compare():
-    OldServicesdf = pd.read_sql(OldServices.query.statement, OldServices.query.session.bind)
-    NewServicesdf = pd.read_sql(NewServices.query.statement, NewServices.query.session.bind)
+    OldServicesdf = pd.read_sql(OldServices.query.statement, OldServices.query.session.bind).drop(columns=['id']) 
+    NewServicesdf = pd.read_sql(NewServices.query.statement, NewServices.query.session.bind).drop(columns=['id']) 
     
     removeddf = OldServicesdf.merge(NewServicesdf, how = 'outer' ,indicator=True).loc[lambda x : x['_merge']=='left_only']
     addeddf = OldServicesdf.merge(NewServicesdf, how = 'outer' ,indicator=True).loc[lambda x : x['_merge']=='right_only']
@@ -140,9 +136,6 @@ def compare():
     return removeddf, addeddf
 
 def run_new_scan():
-    if scanner_mutex.locked() == True:
-        return "Scanner running already"
-
     scanner_mutex.acquire()
     OldServices.query.delete()
     df = pd.read_sql(NewServices.query.statement, NewServices.query.session.bind)
@@ -198,17 +191,33 @@ def run_new_scan():
             #CHANGEME - do webhook or something here
     
     db.session.commit()
-    return "Scanning Finished"
 
 #initial scan, rerunning this wipes baseline OpenPorts table and readds ports
 @app.route("/initial_scan")
 def initial_scan_page():
-    return initial_scan()
+    if scanner_mutex.locked() == True:
+        return "Scanner running already"
+    else:
+        scanner = threading.Thread(target=initial_scan)
+        scanner.start()
+        return "Scan started"
 
 #scan will result in comparision between initial scan results
 @app.route("/new_scan")
 def new_scan_page():
-    return run_new_scan()
+    if scanner_mutex.locked() == True:
+        return "Scanner running already"
+    else:
+        scanner = threading.Thread(target=run_new_scan)
+        scanner.start()
+        return "Scan started"
+
+@app.route("/scan_status")
+def scan_status():
+    if scanner_mutex.locked() == True:
+        return "Scanner running already"
+    else:
+        return "Scanner NOT running"
 
 #https://schedule.readthedocs.io/en/stable/
 schedule.every(8).hours.do(run_new_scan) #CHANGEME
