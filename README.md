@@ -12,11 +12,12 @@ I want to know if a new port is opened up for the assets I'm watching... Port ca
 - Python3-Nmap
 - Python Schedule library
 - Docker
+- Pandas
 
 # Running the project
 - Clone the project
 - Modify the code, look for #CHANGEME
-- Install flask libraries and debian/ubuntu packages (see Dockerfile), run flask run command, Alternatively, look use docker, look at the Dockerfile comments
+- Install flask libraries and debian/ubuntu packages (see Dockerfile), run flask run command, Alternatively, use docker. See the Dockerfile for commands
 
 # Usage
 - Your initial assets will be added automatically
@@ -24,8 +25,8 @@ I want to know if a new port is opened up for the assets I'm watching... Port ca
 - Visit http://ip:port/initial_scan to start initial scan and add open ports (baseline). this might take a while. You can modify the code to scan right after assets are added as well.
 - Visit http://ip:port/new_scan to do a scan and compare, or just let schedule code do automated scanning...
 
-# Warning
-- Not tested with large amount of assets
+# Warning                                                                                                                                                                                    
+- Not tested with large amount of assets                                                                                                                                                     
 - There is no threading for scans that are running so scanning a lot of IPs may take a while
 - webapp doesn't have password protection
 - Docker image is kinda large
