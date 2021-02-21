@@ -18,6 +18,8 @@ scanner_mutex = threading.Lock()
 
 import pandas as pd
 
+import requests
+
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 #app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////app/database/portwatch.db' #CHANGEME
@@ -66,17 +68,33 @@ class ServiceChanges(db.Model):
     status = db.Column(db.String(7),nullable=False)
     timestamp = db.Column(db.DateTime,default=datetime.datetime.utcnow)
 
+class Notify(db.Model):
+    id = db.Column(db.Integer,primary_key=True)
+    name = db.Column(db.String(10),nullable=False)
+    url = db.Column(db.String(), nullable=False)
+    comment = db.Column(db.String(140))
+
 db.create_all()
 
 admin.add_view(ModelView(Asset, db.session))
 admin.add_view(ModelView(OldServices, db.session))
 admin.add_view(ModelView(NewServices, db.session))
 admin.add_view(ModelView(ServiceChanges, db.session))
+admin.add_view(ModelView(Notify, db.session))
 
 #add assets here and visit http://IP:PORT/asset_add to add the assets
 db.session.add(Asset(name="server",comment="testing",ips="192.168.95.137, 10.0.0.30")) #CHANGEME
 db.session.commit()
 
+def notifier(service_info):
+    notification_endpoints = Notify.query.all()
+    if len(notification_endpoints) > 0:
+        for endpoint in notification_endpoints:
+            try:
+                r = requests.post(endpoint.url, data=service_info, timeout=1)
+            except:
+                print("something wrong with sending data to ", endpoint.url)
+            
 #just scan top ports. Modify according to needs
 def scan(ips):
     results = nmap.scan_top_ports(ips, args="--open -Pn -T5 -sV") #https://github.com/nmmapper/python3-nmap #CHANGEME
@@ -183,12 +201,14 @@ def run_new_scan():
     if removeddf.shape[0] > 0:
         for line in removeddf.iloc:
             db.session.add(ServiceChanges(asset_name=line['asset_name'], ip=line['ip'], port=int(line['port']), name=line['name'], product=line['product'], version=line['version'], extrainfo=line['extrainfo'], status="REMOVED"))
-            #CHANGEME - do webhook or something here
+            service_info = {'asset_name' : line['asset_name'],'ip' : line['ip'],'port' : int(line['port']),'name' : line['name'],'product' : line['product'],'version' : line['version'],'extrainfo' : line['extrainfo'],'status' : 'REMOVED' }
+            notifier(service_info)
 
     if addeddf.shape[0] > 0:
         for line in addeddf.iloc:
             db.session.add(ServiceChanges(asset_name=line['asset_name'], ip=line['ip'], port=int(line['port']), name=line['name'], product=line['product'], version=line['version'], extrainfo=line['extrainfo'], status="ADDED"))
-            #CHANGEME - do webhook or something here
+            service_info = {'asset_name' : line['asset_name'],'ip' : line['ip'],'port' : int(line['port']),'name' : line['name'],'product' : line['product'],'version' : line['version'],'extrainfo' : line['extrainfo'],'status' : 'ADDED' }
+            notifier(service_info)
     
     db.session.commit()
 
@@ -218,6 +238,10 @@ def scan_status():
         return "Scanner running already"
     else:
         return "Scanner NOT running"
+
+@app.route("/")
+def index():
+    return "Try /admin, /initial_scan, /new_scan, or /scan_status"
 
 #https://schedule.readthedocs.io/en/stable/
 schedule.every(8).hours.do(run_new_scan) #CHANGEME
