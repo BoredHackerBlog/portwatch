@@ -1,4 +1,7 @@
 # portwatch
+
+# don't use this. it's kinda broken. try this maybe: https://github.com/BoredHackerBlog/portwatch2 ??
+
 Project that does a baseline port scan then does scheduled scans and adds findings to a table
 
 # use case
